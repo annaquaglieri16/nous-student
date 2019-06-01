@@ -1,0 +1,98 @@
+---
+title: "Factors influencing success"
+author: "Anna Quaglieri"
+date: "30/05/2019"
+output: html_document
+---
+
+```{r echo = FALSE,message=FALSE, warning=FALSE,setup}
+library(tidyverse)
+library(Hmisc)
+library(MASS)
+
+knitr::opts_chunk$set(eval = TRUE,echo = FALSE,tidy = TRUE,message = FALSE,include = FALSE,warning = FALSE)
+```
+
+
+```{r}
+knitr::read_chunk(path = "nous-student.R")
+```
+
+```{r read-data}
+```
+
+
+```{r merge-assessment}
+```
+
+
+```{r merge-vle}
+```
+
+
+```{r merge-student-infos}
+```
+
+```{r study-replicate-students,eval=TRUE,include=FALSE}
+```
+
+
+# Student's information available
+
+The Open University Learning Analytics dataset contains information for `r length(unique(student.info$id_student))` students including: the course module that they attended; information about the course module (length, credit, etc...); their final results and student interaction with the virtual learning environment (VLE). Every student can either **withdraw**, **fail**, **pass** or **pass with distinction** a module that they attended. `r length(unique(repl.student$id_student))` students enrolled in more than one module (either the same or a different one). Given the large amount of student available, only one entry per student was included in this study. If a student enrolled in the same module multiple times, either for initial failure or withdrawal, we kept their most recent entry. Whereas if a student enrolled in different modules we randomly selected one of them. This step removed roughly 12% of the initial student's entries. In addition, in order to avoid mis-reporting bias, we excluded students who appeared to have never registered into a module (registration date was unavailable) and students who unregistered from a module but their final result was not, **withdrawal**, as expected.  
+
+Table 1 shows the student available in the study by their final result and Figure 1 reports how many students attended each moudule across years and presentations.   
+
+```{r table-dataset-unique, results='asis',eval=TRUE,include=TRUE}
+```
+
+
+```{r affluence-to-course, eval=TRUE,include=TRUE}
+```
+
+
+# Defining students success
+
+We assessed the factors that led students to withdrawal as well as factors that led them to succeed in their course (pass/distrinction) vs failure. 
+Interestingly 
+
+
+```{r demographic-success, eval=TRUE,include=TRUE}
+```
+
+```{r demographic, eval=TRUE,include=TRUE}
+```
+
+
+
+
+* Main point. 
+
+Understanding the reason behind dropout of students is fundamental to put resources into action. There is a wide hetergeneity in the dropout rate between modules which goes from a minimum of 10% for module GGG to more than 40% for module CCC. The dropout remains failry similar between semester but slightly worsen in 2014. Dropout and failure to pass exams seems to be determined by similar factors, with wealth of the neighborooh being an important factor. However, it is interesting to notice that a higher socio-economic status does not  induce lower dropout. While regions **** show the lowest IMB and higher dropout rate, **** whilst having the hightes wealth also have high dropout relately to the average. **** are the regions witht he lowest dropout rate and they lay on average socio-economic status.       
+
+   
+
+- the droput rate of students is impacted by both socio-economical and geographical
+
+- evidence clear for some region that the socio economic status has an impact on the withdrawal, average wealth region scotlend/wales and ireland have the lowest levels of withdrawal. And there is a moderaleteu and very weathely east and south region which still show a high level of withdrawal
+
+- The chance that a student will withdraw increases with age and it is higher for students living in poorer socio-economic regions. Poorer and richer socio economic areas occurs in several regions with ** and ** having more. 
+
+* (lineplots/boxplos by these demographics)
+
+- The success stringly depend on the module attended with modules *** being more similar to each other. 
+- It is encoraging that the quality of the materials provided to the students, in terms of online material, increased with the years getting better and more used and distributed across module. 
+- The success of the student largely benefits from the material provided online with the majority of the pages visited, apart from the home page, being Quiz. Havng the possibilities of quiz will make student more confident and prepared for the exam pushing success.  
+
+
+* plot of most frequent pages visited by module to see which modules do not have loads of resources - make better plot
+  - total of clicks by module
+* success by use of online resources. 
+
+
+
+* demographics showing relashionship final_resultt and demographics
+* factors influencing withdrawal: are they similar between semesters?
+* factors influencing success: are they similar between semesters?
+* Difference between semesters
+* Exploring use of VLE - improvement across the years and most used channels and what courses seem to do better in using them. 

@@ -1,0 +1,1120 @@
+---
+title: "University student analysis"
+author: "Anna Quaglieri"
+date: "28/05/2019"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '4'
+    fig_caption: yes
+    number_sections: yes
+    toc_float: yes
+    theme: cosmo
+  github_document:
+    toc: yes
+    toc_depth: 4
+---
+
+# Setup
+
+```{r echo = FALSE,message=FALSE, warning=FALSE,setup}
+library(tidyverse)
+library(Hmisc)
+library(MASS)
+library(broom)
+library(cowplot)
+library(MKmisc)
+library(plotROC)
+library(ggrepel)
+
+knitr::opts_chunk$set(eval = TRUE,echo = TRUE,tidy = TRUE,message = FALSE,include = TRUE,warning = FALSE)
+```
+
+
+
+```{r read-data}
+assess <- read_csv("anonymisedData/assessments.csv")
+course <- read_csv("anonymisedData/courses.csv")
+student.assess <- read_csv("anonymisedData/studentAssessment.csv")
+student.info <- read_csv("anonymisedData/studentInfo.csv")
+student.regio <- read_csv("anonymisedData/studentRegistration.csv")
+student.vle <- read_csv("anonymisedData/studentVle.csv")
+vle <- read_csv("anonymisedData/vle.csv")
+
+```
+
+
+```{r describe-data}
+table(assess$code_module) # 7 modules
+
+glimpse(assess)
+glimpse(course)
+glimpse(student.assess)
+glimpse(student.info) # students demoraphics + final results for all students
+glimpse(student.regio) # student registration details
+glimpse(student.vle) # interaction with virtual learning envir
+glimpse(vle)
+```
+
+# Data in the cohort
+
+## Assessments
+
+There are 7 modules (corses) and for each module there can be 3 assessment types (not all present in every module)
+
+```{r assess-describe}
+table(assess$assessment_type,assess$code_module)
+```
+
+## Students
+
+```{r modules-per-student}
+n.modules <- student.info %>%
+  group_by(id_student) %>%
+  summarise(len.modules = length(code_module))
+```
+
+* There is a total of `r length(unique(student.info$id_student))` students enrolled and a student attended a minimum of `r min(n.modules$len.modules)` to a maximum of `r max(n.modules$len.modules)`. 
+
+* There are demographics data and assessment results for all students that registered in a module. 
+
+```{r info-check}
+sum(!(student.assess$id_student %in% student.info$id_student))
+sum(!(student.info$id_student %in% student.assess$id_student))
+
+sum(!(student.info$id_student %in% student.assess$id_student))
+
+sum(!(student.info$id_student %in% student.regio$id_student))
+```
+
+* In theory, if a student also has an unregistration date they should not have a final score for an exam for a module. Indeed, Students who unregistered have `Withdrawal` as the value of the `final_result` column in the `studentInfo.csv` file. However, this is not always the case and I will clean up students with a different `final_result` entry.
+
+* Assessment are submitted throghout the module (different dates) and if a student does not submit an assessment then there is no record. 
+
+* There are `r length(unique(student.assess$id_student[!is.na(student.assess$score)]))` students with at least an assessment available with a valid score. 
+
+* All student with an assessment have demographics available.
+
+* `r length(unique(student.info$id_student[!(student.info$id_student %in% student.assess$id_student)]))` students do not have an assessment available.
+
+* There are `r length(unique(student.info$id_student[!(student.info$id_student %in% student.vle$id_student)]))` students who did not interact with the VLE
+
+* There are `r length(unique(student.assess$id_student[!(student.assess$id_student %in% student.vle$id_student)]))` students with an assessment did not interact with the VLE.
+
+```{r}
+sum(!(student.info$id_student %in% student.vle$id_student))
+sum(!(student.assess$id_student %in% student.vle$id_student))
+```
+
+* A student might have several entries in student.info but not all assignment
+* This means that if I merge the assignment score with student infos, I will have some studnet.infos entries with NAs for the score. 
+* Also some students have NAs for their scores in the assessment data
+
+# Merge datasets
+
+## VLE
+
+```{r merge-vle}
+vle.combine <- vle %>%
+left_join(student.vle) %>%
+  dplyr::rename(date.vle = date)
+```
+
+## Assessment infos
+
+```{r merge-assessment}
+# Connect assessment types scores with scores
+ass <- student.assess %>%
+  left_join(assess)
+
+summary(ass$score)
+table(sign(ass$date_submitted),ass$code_module,ass$code_presentation)
+table(sign(ass$date_submitted),ass$assessment_type)
+ass$date.sign <- sign(ass$date_submitted)
+ggplot(ass,aes(x = factor(date.sign), y = score, fill=code_module)) + geom_boxplot()
+
+ass <- ass %>%
+  filter(!is.na(score))
+```
+
+* There are `r sum(is.na(ass$score))` NAs assessment scores and `r sum(sign(ass$date_submitted) == "-1")` assignments were submitted before the start of the course. Given the large number and my limited knolwledge about the dataset I will keep them in the study. They might be entry tests. However, I will remove the NAs assessment score. 
+
+* On the online resource it says:
+date – information about the final submission date of the assessment calculated as the number of days SINCE the start of the module-presentation. The starting date of the presentation has number 0 (zero). How can it be negative??
+
+* Still after filtering this leaves me with `r dim(ass)[1]` assessments across `r length(unique(ass$id_student))` students. 
+
+## Students demographics
+
+```{r merge-student-infos}
+# Now I know which student what id assessment did.
+combine <- student.info %>% # code_module , code_pres, id_student, demo, final score.
+  left_join(student.regio) %>% 
+    left_join(course) 
+```
+
+# Create combined features: assignment score and number of clicks
+
+```{r create-features}
+summary(ass$score)
+ass.total <- ass %>%
+  group_by(code_module,code_presentation,id_student) %>%
+  summarise(comb.score = mean(score))
+
+click.total <- vle.combine %>%
+  group_by(code_module,code_presentation,id_student) %>%
+  summarise(total.clicks = sum(sum_click))
+
+# Merge assessment and clicks
+click.score <- ass.total %>%
+  left_join(click.total)
+```
+
+
+# Filter students, modify variables
+
+In this first analysis I am interested in understanding what are the factors that influence withdrawal (1 = withdrawl, 0 = PASS/FAIL/Distinction) and Success (1 = PASS/Distinction, 0 = FAIL). The factors influencing withdrawal could be very different from the factors leading to failure, e.g. external factors versus student's capabilities.
+
+I will create a total weigthed score for the assigment and exams scores available in each module. Some students, if they withdrew do not have score for a module so there will be NAs once combining this meta-score with student infos. I also created a total score for the number of clicks in the VLE done in one module in each semester. I will also create a variable with total number of students in each module. 
+
+
+## Unregistered/Registered students
+
+All students who unregistered during the course could only be `Withdrawn` as final result since they left the course.  
+However, it appears that some students that never `unregistered` still withdrawn from the module. 
+Also, Some students never registered but still they unregistered or they are in course??
+
+```{r keep-registered-students}
+combine$Unregistered <- ifelse(is.na(combine$date_unregistration),"in course","unregistered")
+combine$Registered <- ifelse(is.na(combine$date_registration),"not registered","registered") 
+
+sum.reg <- combine %>%
+  group_by(Registered,Unregistered,final_result) %>%
+    summarise(n.students = length(unique(id_student)))
+
+knitr::kable(sum.reg,caption = "Number of students by registration date, unregistration date and final result.")
+```
+
+
+```{r filter-unreg}
+combine <- combine %>%
+  filter(!(Registered %in% "not registered"),
+         !(Unregistered  %in% "unregistered" & Registered %in% "registered" & final_result %in% "Fail")) 
+```
+
+We have now `r length(unique(combine$id_student))` students.
+
+```{r merge-with-ass-clicks}
+dim(combine)
+combine.feat <- combine %>%
+  left_join(click.score)
+dim(combine.feat)
+```
+
+
+## Modify some variables: categorical to numeric
+
+```{r nas-in-variables}
+nas <- apply(combine.feat,2,function(x) sum(is.na(x)))
+nas
+```
+
+
+```{r recode-vars}
+table(combine.feat$highest_education)
+table(combine.feat$num_of_prev_attempts)
+
+combine.feat <- combine.feat %>%
+  mutate(withdraw = ifelse(final_result %in% "Withdrawn",1,0),
+         imd_band_num = as.numeric(as.factor(imd_band)),
+         highest_education = factor(highest_education, levels=c("No Formal quals","Lower Than A Level", "A Level or Equivalent","HE Qualification","Post Graduate Qualification")),
+         num_of_prev_attempts_dich = ifelse(num_of_prev_attempts > 0,">0","0"),
+         year = str_remove(code_presentation, pattern = "B|J"),
+         semester = str_extract(code_presentation, pattern = "B|J"),
+         code_presentation = factor(code_presentation, levels = c("2013B","2014B","2013J","2014J")))
+```
+
+
+# Filter multiple entries per student
+
+* There are students who attempted the same module multiple times and students who attempted different modules. The replicates account for roughly 12% of the entries. To avoid more complicated random intercept models, if the same student attempted the same module twice then I will keep the entry with the highest number of  num_of_prev_attempts because this information should include information about previous attempts. 
+* I will discard randomly all students who attempted different modules. If these aren't removed, the entries won't be independent and it would require introducing a mixed effect model with random intercept for each subject. The model itself is a logistic model with many independent variables and fitting a mixed model could be quite complicated and the majority of the students anyway only have one entry. 
+
+```{r study-replicate-students}
+repl <- names(table(combine.feat$id_student)[table(combine.feat$id_student) > 1])
+repl.student <- combine.feat[combine.feat$id_student %in% repl,]
+
+repl.student.sum <- repl.student %>%
+  group_by(id_student) %>%
+  summarise(n.modules = length(unique(code_module)),
+            n.results = length(unique(final_result)),
+            n.repl = length(code_module))
+
+ggplot(repl.student.sum,aes(x=factor(n.modules),fill = factor(n.results))) + geom_bar(position = "dodge") + facet_wrap(~n.repl) +
+  theme_bw()
+```
+
+
+```{r remove-duplicate-students}
+student.to.keep <- combine.feat %>%
+  group_by(code_module,id_student) %>%
+  summarise(code_presentation = code_presentation[which.max(num_of_prev_attempts)]) %>%
+  unite(key.student.module, code_module,id_student,code_presentation,sep="-",remove=FALSE)
+
+combine.feat.unique <- combine.feat %>%
+  unite(key.student.module, code_module,id_student,code_presentation,sep="-",remove=FALSE) %>%
+  filter(key.student.module %in% student.to.keep$key.student.module )
+
+combine.feat.unique <- combine.feat.unique[!duplicated(combine.feat.unique$id_student),]
+
+nrow(combine.feat.unique)/nrow(combine.feat) # removed 12% of the initial data
+```
+
+
+```{r add-nstudent-per-module}
+# Total number of students attending a course - includign students who attempted different modules
+nstudents <- combine.feat %>%
+  group_by(code_module,code_presentation) %>%
+  summarise(n.students = length(unique(id_student)))
+
+combine.feat.unique <- combine.feat.unique %>%
+  left_join(nstudents)
+```
+
+
+```{r table-dataset-unique}
+sum.reg <- combine.feat.unique %>%
+  group_by(Registered,Unregistered,final_result) %>%
+    summarise(n.students = length(unique(id_student)))
+colnames(sum.reg) <- c("Registered","Unregistered","Final result","Number of students")
+
+knitr::kable(sum.reg,caption = "Number of students by registration date, unregistration date and final result.")
+```
+
+
+# Describe modules and students attending each module
+
+* Across two year there were two presentations in each year
+* Module AAA is the one with less student, probably aroun 400. Module CCC in 2014 is the one attracting mode students
+* There seem to be a semester effect in the number students, with more students enrolling in the J part of the year
+
+```{r affluence-to-courses, fig.cap="Number of students enrolled in each module across years and presentations. The figure included students who enrolled multiple time (same or different module). "}
+sum.students <- combine.feat %>%
+  group_by(code_presentation,code_module) %>%
+  summarise(n.students = length(unique(id_student))) %>%
+  ungroup() %>%
+  mutate(year = str_remove(code_presentation, pattern = "B|J"),
+         semester = str_extract(code_presentation, pattern = "B|J"),
+         code_presentation = factor(code_presentation, levels = c("2013B","2014B","2013J","2014J"))) %>%
+  dplyr::rename(`Code presentation` = code_presentation)
+
+
+# There seem to be a semester effect in the number students, with more students enrolling in the J 
+ggplot(sum.students, aes(x = code_module, y = n.students, fill = `Code presentation`)) + 
+  geom_bar(stat = "identity",position = "dodge",colour="white") + theme_bw() + ggtitle("Number of students enrolled in each module") + theme(legend.position = "bottom") + labs(x  = "Code of module", y = "Number of student enrolled")
+```
+
+
+```{r affluence-to-courses-year}
+# There doesn't seem to be a year effect
+ggplot(sum.students, aes(x = code_module, y = n.students, fill = year)) + 
+  facet_wrap(~ semester) +
+  geom_bar(stat = "identity",position = "dodge",colour="white") + theme_bw()+ ggtitle("Number of students enrolled in each module")
+```
+
+* The score does not look super discriminant. Am I using it correctly? 
+
+```{r score-by-finalresul}
+ggplot(combine.feat.unique, aes(x = comb.score, fill = final_result))  + geom_density() + theme_bw()
+```
+
+# What is influencing withdrawl?
+
+* Withdrawal by region
+* mean withdrawal by module 
+* Adjusting using the VLe
+
+* People that withdraw tend to have a slightly lower socio economic status
+
+* A lot of region are around the mean withdrawal level. I will take the south west region as reference. 
+
+
+```{r exploratory-imd_band_num-region}
+# Poeple that withdraw tend to have a slightly lower socio economic statis
+ggplot(combine.feat.unique,aes(x = factor(withdraw), y = imd_band_num)) + geom_boxplot() + facet_wrap(~semester) + theme_bw()
+
+# Scotland, wales and ireland are the ones with lower levels of widthdrawal
+sum.region.with <- combine.feat.unique %>%
+  group_by(region) %>%
+  summarise(imd.mean = mean(imd_band_num,na.rm = TRUE),
+            sem.imd.mean = sd(imd_band_num,na.rm = TRUE)/sqrt(length(imd_band_num[!is.na(imd_band_num)])),
+            
+            with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  mutate(region = fct_reorder(region,with.mean))
+
+ggplot(sum.region.with,aes(x = with.mean, y = imd.mean,colour=region)) + geom_point(stat = "identity")  + theme_bw() +
+  geom_errorbar(aes(ymin = imd.mean - sem.imd.mean, 
+                    ymax = imd.mean + sem.imd.mean)) +
+  geom_errorbarh(aes( xmin = with.mean - sem.with.mean, 
+                    xmax = with.mean + sem.with.mean)) +
+  geom_label_repel(aes(label = region)) +
+  geom_hline(yintercept = mean(combine.feat.unique$imd_band_num,na.rm = TRUE),linetype="dotted") + ylim(c(3.5,7.5)) +
+   geom_vline(xintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted") 
+
+
+
+```
+
+* I will use module BBB as reference for the module, it's around the mean of withdrawal
+
+* The module with higheest prop of withdrawal are CCC/DDD and the ones with less withdrawal are AAA and GGG. The socio econoic area does not seem to be too heterogenous apart from module AAA.
+
+```{r exploratory-imd_band_num-module}
+sum.region <- combine.feat.unique %>%
+  group_by(code_module,semester,year) %>%
+  summarise(imd.mean = mean(imd_band_num,na.rm = TRUE),
+            sem.imd.mean = sd(imd_band_num,na.rm = TRUE)/sqrt(length(imd_band_num[!is.na(imd_band_num)])),
+            
+            with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,with.mean))
+
+ggplot(sum.region,aes(x = with.mean, y = imd.mean,colour=code_module,shape=year)) + geom_point(stat = "identity",size=2)  + theme_bw() +
+  geom_errorbar(aes(ymin = imd.mean - sem.imd.mean, 
+                    ymax = imd.mean + sem.imd.mean)) +
+  geom_errorbarh(aes( xmin = with.mean - sem.with.mean, 
+                    xmax = with.mean + sem.with.mean)) +
+  geom_label_repel(aes(label = code_module)) + facet_wrap(~semester) +
+  geom_hline(yintercept = mean(combine.feat.unique$imd_band_num,na.rm = TRUE),linetype="dotted") + ylim(c(3.5,7.5))+
+   geom_vline(xintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted") 
+```
+
+
+
+```{r exploratory-with-module}
+sum.region <- combine.feat.unique %>%
+  group_by(code_module,semester,year) %>%
+  summarise(with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,with.mean))
+
+ggplot(sum.region,aes(x = code_module, y = with.mean,colour=code_module,shape=year)) + geom_point(stat = "identity",size=2)  + theme_bw() +
+  geom_errorbar(aes(ymin = with.mean - sem.with.mean, 
+                    ymax = with.mean + sem.with.mean),width=0.5)  +
+  geom_label_repel(aes(label = code_module)) + facet_wrap(~semester) +
+  geom_hline(yintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted")
+```
+
+# Exploratory pass-fail
+
+```{r exploratory-withdraw-pass-fail}
+combine.feat.unique <- combine.feat.unique %>%
+  mutate(pass_fail = ifelse(final_result %in% "Fail",0,1)) %>%
+  mutate(pass_fail = ifelse(pass_fail %in% "Withdrawn",NA,pass_fail))
+
+# Scotland, wales and ireland are the ones with lower levels of widthdrawal
+sum.region.pass.fail <- combine.feat.unique %>%
+  group_by(region) %>%
+  summarise(imd.mean = mean(imd_band_num,na.rm = TRUE),
+            sem.imd.mean = sd(imd_band_num,na.rm = TRUE)/sqrt(length(imd_band_num[!is.na(imd_band_num)])),
+            
+            pass.mean = mean(pass_fail),
+            sem.pass.mean = sd(pass_fail)/sqrt(length(pass_fail))) %>%
+  mutate(region = fct_reorder(region,pass.mean)) %>%
+  left_join(sum.region.with[,c("region","with.mean","sem.with.mean")])
+
+
+
+p1=ggplot(sum.region.pass.fail,aes(x = pass.mean, y = with.mean,colour=region)) + geom_point()  + theme_classic() +
+  geom_vline(xintercept = mean(combine.feat.unique$pass_fail,na.rm = TRUE),linetype="dotted",colour="grey") + 
+   geom_hline(yintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted",colour="grey") + 
+  geom_text_repel(aes(label = region),show.legend = FALSE)  + labs(x = "Success rate", y = "Dropout rate") + theme(legend.position = "none")
+
+
+## IMB by region
+sum.region <- combine.feat.unique %>%
+  group_by(region) %>%
+  summarise(imd.mean = mean(imd_band_num,na.rm = TRUE),
+            sem.imd.mean = sd(imd_band_num,na.rm = TRUE)/sqrt(length(imd_band_num[!is.na(imd_band_num)]))) %>%
+  ungroup() %>%
+  mutate(region = fct_reorder(region,imd.mean))
+
+p2=ggplot(sum.region,aes(x = region, y = imd.mean)) + geom_bar(stat = "identity")  + theme_classic() + coord_flip() + labs(x = "Region", y = "Average IMB index")
+
+plot_grid(p1,p2,nrow=1)
+```
+
+* I will use module BBB as reference for the module, it's around the mean of withdrawal
+
+* The module with higheest prop of withdrawal are CCC/DDD and the ones with less withdrawal are AAA and GGG. The socio econoic area does not seem to be too heterogenous apart from module AAA.
+
+```{r exploratory-imd_band_num-module}
+sum.region <- combine.feat.unique %>%
+  group_by(code_module,semester,year) %>%
+  summarise(imd.mean = mean(imd_band_num,na.rm = TRUE),
+            sem.imd.mean = sd(imd_band_num,na.rm = TRUE)/sqrt(length(imd_band_num[!is.na(imd_band_num)])),
+            
+            with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,with.mean))
+
+ggplot(sum.region,aes(x = with.mean, y = imd.mean,colour=code_module,shape=year)) + geom_point(stat = "identity",size=2)  + theme_bw() +
+  geom_errorbar(aes(ymin = imd.mean - sem.imd.mean, 
+                    ymax = imd.mean + sem.imd.mean)) +
+  geom_errorbarh(aes( xmin = with.mean - sem.with.mean, 
+                    xmax = with.mean + sem.with.mean)) +
+  geom_label_repel(aes(label = code_module)) + facet_wrap(~semester) +
+  geom_hline(yintercept = mean(combine.feat.unique$imd_band_num,na.rm = TRUE),linetype="dotted") + ylim(c(3.5,7.5))+
+   geom_vline(xintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted") 
+```
+
+
+
+```{r exploratory-with-module}
+sum.region <- combine.feat.unique %>%
+  group_by(code_module,semester,year) %>%
+  summarise(with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,with.mean))
+
+ggplot(sum.region,aes(x = code_module, y = with.mean,colour=code_module,shape=year)) + geom_point(stat = "identity",size=2)  + theme_bw() +
+  geom_errorbar(aes(ymin = with.mean - sem.with.mean, 
+                    ymax = with.mean + sem.with.mean),width=0.5)  +
+  geom_label_repel(aes(label = code_module)) + facet_wrap(~semester) +
+  geom_hline(yintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted")
+```
+
+
+# Logistic on withdral including both B and J together
+
+* Mess are less likely to withdraw (does this depend on the region?)
+* East anglian region as reference
+* I am going to randomly take one observation from students with multiple courses
+
+## Combined semester
+
+```{r very-skewed-vars}
+# centered on the mean
+combine.feat.unique$comb.score.std <- scale(combine.feat.unique$comb.score,center = TRUE,scale = TRUE) 
+combine.feat.unique$total.clicks.std <- scale(log(combine.feat.unique$total.clicks),center = TRUE,scale = TRUE)
+combine.feat.unique$studied_credits.std <- scale(log(combine.feat.unique$studied_credits),center = TRUE,scale = TRUE)
+
+par(mfrow=c(2,2))
+hist(combine.feat.unique$comb.score.std)
+hist(combine.feat.unique$total.clicks.std)
+hist(combine.feat.unique$studied_credits.std)
+
+# Recode modules
+regions <- names(table(combine.feat.unique$region))[!(names(table(combine.feat.unique$region)) %in% "South West Region")]
+combine.feat.unique <- combine.feat.unique %>%
+  mutate(code_module = factor(code_module, 
+                              levels = c("BBB","AAA","CCC","DDD","EEE","FFF","GGG")),
+        
+          region = factor(region, levels=c("South West Region",regions)))
+```
+
+
+```{r exploratory-clicks-module}
+sum.region <- combine.feat.unique %>%
+  group_by(code_module,semester) %>%
+  summarise(clicks.mean = mean(total.clicks.std,na.rm = TRUE),
+            sem.clicks.mean = sd(total.clicks.std,na.rm = TRUE)/sqrt(length(total.clicks.std[!is.na(total.clicks.std)])),
+            
+            with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,clicks.mean))
+
+ggplot(sum.region,aes(x = with.mean, y = clicks.mean,colour=code_module)) + geom_point(stat = "identity")  + theme_bw() +
+  geom_errorbar(aes(ymin = clicks.mean - sem.clicks.mean, 
+                    ymax = clicks.mean + sem.clicks.mean)) +
+  geom_errorbarh(aes( xmin = with.mean - sem.with.mean, 
+                    xmax = with.mean + sem.with.mean)) +
+facet_wrap(~semester) +
+   geom_label_repel(aes(label = code_module)) +
+  geom_vline(xintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted")
+```
+
+
+* Very bad collinearity
+
+```{r logistic1-withdraw}
+# No imd
+m <- glm(withdraw ~ gender + region + highest_education + studied_credits.std + disability +
+    module_presentation_length + code_module + semester + year + total.clicks.std + n.students + num_of_prev_attempts_dich + comb.score.std, data = combine.feat.unique, family = binomial)
+
+car::vif(m)
+```
+
+A few independent variables show quite high VIF which is symptoms of  multicollinearity. This makes sense because the number of students and length of a course are correlated with the module. 
+
+```{r nstudents-by-module}
+ggplot(combine.feat.unique,aes(x= code_module, y = n.students,fill=semester)) + geom_bar(stat = "identity",position = "dodge") + theme_bw()
+```
+
+### Remove `n.students` and `module_presentation_length`
+
+```{r logistic2-withdraw}
+m <- glm(withdraw ~ gender + region + highest_education + studied_credits.std + disability + code_module + semester + year + total.clicks.std +  num_of_prev_attempts_dich + comb.score.std + imd_band_num, data = combine.feat.unique, family = binomial)
+
+car::vif(m) # looks better
+
+summary(m)
+
+tidym.combined <- tidy(m,conf.int=TRUE) %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidym.combined,aes(x = term, y = estimate)) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with withdrawal")
+```
+
+```{r check-predictions}
+aug1 <- cbind(combine.feat.unique, predict(m, newdata = combine.feat.unique, type = "link",
+    se = TRUE))
+pairs(aug1[,c("fit","total.clicks.std","studied_credits.std")])
+
+
+aug1 <- cbind(combine.feat.unique, predict(m, newdata = combine.feat.unique, type = "response",
+    se = TRUE))
+ggplot(aug1,aes(x = fit , fill = factor(withdraw))) + geom_histogram(alpha=0.5)+ theme_bw()
+
+# Chisquare t-test
+HLgof.test(fit = aug1$fit[!is.na(aug1$fit)], 
+           obs = aug1$withdraw[!is.na(aug1$fit)])
+
+
+# Roc curve
+aug1 <- cbind(combine.feat.unique, predict(m, newdata = combine.feat.unique, type = "response",
+    se = TRUE))
+roc.log <- ggplot(aug1, aes(d = withdraw, m = fit)) + geom_roc() + theme_bw()
+roc.log + 
+  ggtitle("Withdrawal - combined semesters") + 
+  annotate("text", x = .75, y = .25, 
+           label = paste("AUC =", round(calc_auc(roc.log)$AUC, 2))) +
+  geom_abline(sslope = 1, intercept = 0, linetype = "dotted") +
+  scale_x_continuous("1 - Specificity", breaks = seq(0, 1, by = .1))
+```
+
+
+```{r only-clicks}
+m <- glm(withdraw ~  total.clicks.std , data = combine.feat.unique, family = binomial)
+
+aug1 <- cbind(combine.feat.unique, predict(m, newdata = combine.feat.unique, type = "link",
+    se = TRUE))
+
+ggplot(aug1,aes(x = fit , fill = factor(withdraw))) + geom_histogram(alpha=0.5)+ theme_bw()
+```
+
+* There does not seem to be a great fit to the data. 
+
+```{r clicks-matter}
+ggplot(combine.feat.unique,aes(x = final_result,y=total.clicks.std,fill = semester)) + geom_boxplot() + theme_bw()
+```
+
+## Withdrawal by semester
+
+### Semester B
+
+* Remove regions, it was adding coplexity to the model but not really making that much of a difference. Should probably test it.
+
+```{r}
+semB <- subset(combine.feat.unique, semester %in% "B")
+m <- glm(withdraw ~ gender + region + highest_education + studied_credits.std + disability + code_module + year + total.clicks.std +  num_of_prev_attempts_dich + comb.score.std + imd_band_num, data = semB, family = binomial)
+
+car::vif(m) # oooks better
+
+summary(m)
+
+tidyB <- tidy(m,conf.int=TRUE) %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidyB,aes(x = term, y = estimate)) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with withdrawal")
+```
+
+```{r}
+aug1 <- cbind(semB, predict(m, newdata = semB, type = "response",
+    se = TRUE))
+
+ggplot(aug1,aes(x = fit , fill = factor(withdraw))) + geom_histogram(alpha=0.5)+ theme_bw()
+
+HLgof.test(fit = aug1$fit[!is.na(aug1$fit)], 
+           obs = aug1$withdraw[!is.na(aug1$fit)])
+```
+
+### Semester J
+
+```{r}
+semJ <- subset(combine.feat.unique, semester %in% "J")
+m <- glm(withdraw ~ gender + region + highest_education + studied_credits.std + disability + code_module + year + total.clicks.std +  num_of_prev_attempts_dich + comb.score.std + imd_band_num, data = semJ, family = binomial)
+
+car::vif(m) # oooks better
+
+summary(m)
+
+tidyJ <- tidy(m,conf.int=TRUE) %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidyJ,aes(x = term, y = estimate)) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with withdrawal - J")
+```
+
+```{r}
+aug1 <- cbind(semJ, predict(m, newdata = semJ, type = "response",
+    se = TRUE))
+
+ggplot(aug1,aes(x = fit , fill = factor(withdraw))) + geom_histogram(alpha=0.5)+ theme_bw()
+
+HLgof.test(fit = aug1$fit[!is.na(aug1$fit)], 
+           obs = aug1$withdraw[!is.na(aug1$fit)])
+```
+
+
+### Compare B and J: difference of estimates
+
+```{r blue-diff-betas}
+tidyB <- tidyB %>%
+  mutate(semester = "B")
+
+tidyJ <- tidyJ %>%
+  mutate(semester = "J")
+
+# Differences of betas
+tidy.compare.beta <- bind_rows(tidyB,tidyJ) %>%
+  dplyr::select(term,estimate,semester) %>%
+  spread(key = semester, value = estimate)  %>%
+  mutate(diff.estimate = B - J)
+
+# Uncertainty of difference
+tidy.compare.std <- bind_rows(tidyB,tidyJ) %>%
+  dplyr::select(term,std.error,semester) %>%
+  spread(key = semester, value = std.error )  %>%
+  group_by(term) %>%
+  mutate(diff.std = sqrt(B^2 + J^2)) %>%
+  dplyr::select(-B,-J)
+
+# Combine and CI
+tidy.compare <- tidy.compare.beta %>%
+  left_join(tidy.compare.std) %>%
+  mutate(diff.estimate =  diff.estimate/diff.std) %>%
+  mutate(conf.low = diff.estimate - 1.96*diff.std,
+         conf.high = diff.estimate + 1.96*diff.std) 
+
+ggplot(tidy.compare,aes(x=term,y=diff.estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low,ymax= conf.high),width=0.5) + theme_bw() + geom_hline(yintercept = 0,linetype="dotted") + coord_flip() + labs(y = "B - J") + ggtitle("Differences between semesters")
+```
+
+
+## Factors influencing success in final result
+
+* I am aware that some observations will be discarded due to missing values. 
+
+```{r create-pass-fail}
+combine.pass.fail <- combine.feat.unique %>%
+  mutate(pass_fail = ifelse(final_result %in% "Fail",0,1)) %>%
+  filter(final_result != "Withdrawn")
+```
+
+
+```{r correlation-between-xs}
+combine.feat.unique.num <- combine.pass.fail %>%
+  dplyr::select(gender , region , highest_education , studied_credits.std , disability , code_module , semester , year , total.clicks.std ,  num_of_prev_attempts_dich , comb.score.std , imd_band_num,pass_fail) %>%
+  mutate_all(.funs = function(x) as.numeric(as.factor(x)))
+
+corrplot::corrplot(cor(combine.feat.unique.num,use="pairwise.complete.obs"))
+```
+
+
+```{r logistic-pass-fail}
+
+m <- glm(pass_fail ~ gender + region + highest_education + studied_credits.std + disability + code_module + semester + year + total.clicks.std +  num_of_prev_attempts_dich + comb.score.std + imd_band_num, data = combine.pass.fail, family = binomial)
+
+car::vif(m)
+
+tidym <- tidy(m,conf.int=TRUE) 
+
+tidym <- tidym %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidym,aes(x = term, y = estimate,colour=-log10(p.value))) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high))  +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with success vs failure")
+```
+
+* Semester has somewhat different regional composition
+
+```{r logistic-pass-fail-reduced}
+m <- glm(pass_fail ~ gender + region + highest_education + studied_credits.std + disability + year + total.clicks.std +  num_of_prev_attempts_dich + comb.score.std + imd_band_num, data = combine.pass.fail, family = binomial)
+
+car::vif(m)
+
+tidym <- tidy(m,conf.int=TRUE) 
+
+tidym <- tidym %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidym,aes(x = term, y = estimate,colour=-log10(p.value))) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high))  +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with success vs failure")
+```
+
+
+```{r}
+aug1 <- cbind(combine.pass.fail, predict(m, newdata = combine.pass.fail, type = "response",
+    se = TRUE))
+
+ggplot(aug1,aes(x = fit , fill = factor(pass_fail))) + geom_histogram(alpha=0.5)+ theme_bw()
+
+library(MKmisc)
+HLgof.test(fit = aug1$fit[!is.na(aug1$fit)], 
+           obs = aug1$pass_fail[!is.na(aug1$fit)])
+```
+
+
+# Clicks
+
+In 2014 there was an increased activity on the VLe which is probably why it helped improving success. 
+
+```{r}
+vle.combine.sum <- vle.combine %>%
+  group_by(code_module,code_presentation,activity_type,id_student) %>%
+  summarise(sum_click = sum(sum_click)) %>%
+  unite(key.student.module, code_module,id_student,code_presentation,sep="-",remove=FALSE) %>%
+  filter(key.student.module %in% student.to.keep$key.student.module ) %>%
+ mutate( year = str_remove(code_presentation, pattern = "B|J"),
+         semester = str_extract(code_presentation, pattern = "B|J")) %>%
+  left_join(nstudents)
+
+nstudents.year.semester <- combine.feat %>%
+  group_by(year,semester) %>%
+  summarise(n.students = length(unique(id_student)))
+
+
+vle.combine.sum.sum <- vle.combine.sum %>%
+  group_by(activity_type,year,semester) %>%
+  summarise(n.clicks = sum(sum_click)) %>%
+  ungroup() %>%
+  left_join(nstudents.year.semester) %>%
+  mutate(n.clicks.std = n.clicks/n.students) %>%
+    mutate(activity_type =  fct_reorder(activity_type,n.clicks.std))
+
+ggplot(vle.combine.sum.sum,aes(x = activity_type, y = n.clicks.std, fill = year)) + geom_bar(stat="identity",position="dodge") +facet_wrap(~semester) + coord_flip() + theme_bw()
+```
+
+
+* AAA has got very little students
+
+```{r top5-activities}
+vle.combine.top5 <- vle.combine.sum %>%
+  filter(activity_type %in% c("oucontent","forumng","homepage","quiz","subpage"))
+
+vle.combine.sum.sum <- vle.combine.top5 %>%
+  group_by(activity_type,semester,code_module,n.students) %>%
+  summarise(n.clicks = sum(sum_click)/unique(n.students)) %>%
+  unite(key , activity_type,semester,code_module,sep="-",remove=FALSE) %>%
+  ungroup() %>%
+  mutate(activity_type =  fct_reorder(activity_type,n.clicks))
+
+
+ggplot(vle.combine.sum.sum,aes(x = code_module, y = n.clicks, fill = semester)) + geom_bar(stat="identity",position="dodge",colour="white") +facet_wrap(~activity_type) +  theme_bw() +coord_flip()
+```
+
+```{r click-perstudent-topactivity}
+click.students.activity <- vle.combine.sum %>%
+    filter(activity_type %in% c("oucontent","forumng","homepage","quiz","subpage","resource","ouwiki")) %>%
+  group_by(code_module,year,semester,activity_type,id_student) %>%
+  summarise(n.clicks.act = sum(sum_click))
+```
+
+
+
+```{r combined-clicks-ass}
+combine.pass.fail.clicks <- combine.pass.fail %>%
+  left_join(click.students.activity) %>%
+  spread(key = activity_type, value = n.clicks.act)
+
+apply(combine.pass.fail.clicks,2,function(x) sum(is.na(x)))
+
+# correlation
+combine.feat.unique.num <- combine.pass.fail.clicks %>%
+  mutate_at(.vars = c("oucontent","quiz","homepage","subpage","ouwiki","resource"),.funs = function(x) log(x)) %>%
+  dplyr::select(pass_fail, oucontent,quiz,homepage,subpage,disability, forumng,semester ,year,gender,ouwiki,resource) %>%
+  mutate_all(.funs = function(x) as.numeric(as.factor(x)))
+
+corrplot::corrplot(cor(combine.feat.unique.num,use="pairwise.complete.obs"))
+
+
+# remove homepage
+m <- glm(pass_fail ~ log(oucontent) + log(quiz) + log(subpage) + disability + forumng + semester + year + gender + code_module, data = combine.pass.fail.clicks, family = binomial)
+
+car::vif(m)
+
+tidym <- tidy(m,conf.int=TRUE) 
+
+tidym <- tidym %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidym,aes(x = term, y = estimate,colour=-log10(p.value))) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high))  +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Clicks associated with success vs failure")
+```
+
+
+```{r exploratory-clicks-activity-module}
+combine.feat.unique.clicks <- combine.feat.unique %>%
+  left_join(click.students.activity) %>%
+  spread(key = activity_type, value = n.clicks.act)
+
+sum.region <- combine.feat.unique.clicks %>%
+  group_by(code_module,semester) %>%
+  summarise(clicks.mean = mean(n.clicks.act,na.rm = TRUE),
+            sem.clicks.mean = sd(n.clicks.act,na.rm = TRUE)/sqrt(length(n.clicks.act[!is.na(n.clicks.act)])),
+            
+            with.mean = mean(withdraw),
+            sem.with.mean = sd(withdraw)/sqrt(length(withdraw))) %>%
+  ungroup() %>%
+  mutate(code_module = fct_reorder(code_module,with.mean))
+
+ggplot(sum.region,aes(x = clicks.mean, y = clicks.mean,colour=code_module)) + geom_point(stat = "identity")  + theme_bw() +
+  geom_errorbar(aes(ymin = clicks.mean - sem.clicks.mean, 
+                    ymax = clicks.mean + sem.clicks.mean)) +
+  geom_errorbarh(aes( xmin = with.mean - sem.with.mean, 
+                    xmax = with.mean + sem.with.mean)) +
+  geom_label_repel(aes(label = code_module)) + facet_wrap(~semester) +
+  geom_hline(yintercept = mean(combine.feat.unique$imd_band_num,na.rm = TRUE),linetype="dotted") + ylim(c(3.5,7.5))+
+   geom_vline(xintercept = mean(combine.feat.unique$withdraw,na.rm = TRUE),linetype="dotted") 
+```
+
+
+```
+
+
+# Linear model on score
+
+Now I will study what factors influence the total score obtained with assignments and exams.
+
+It is slightly skewed. 
+
+```{r}
+hist(combine.feat.unique$comb.score)
+```
+
+## Combined by semester
+
+```{r}
+m <- lm(comb.score ~ gender + region + highest_education + studied_credits.std + disability + code_module + semester + year + total.clicks.std +  num_of_prev_attempts_dich + final_result, data = combine.feat.unique)
+
+car::vif(m)
+
+par(mfrow=c(2,2))
+plot(m)
+
+```
+
+* diagnostics
+
+```{r}
+library(MASS)
+
+qqnorm(combine.feat.unique$comb.score,
+       ylab="Quantiles for comb.score")
+qqline(combine.feat.unique$comb.score, 
+       col="red")
+
+Box = boxcox(combine.feat.unique$comb.score + 1 ~ 1,              # Transform Turbidity as a single vector
+             lambda = seq(-6,6,0.1))
+
+Cox = data.frame(Box$x, Box$y)            # Create a data frame with the results
+
+Cox2 = Cox[with(Cox, order(-Cox$Box.y)),] # Order the new data frame by decreasing y
+
+Cox2[1,]                                  # Display the lambda with the greatest
+                                          #    log likelihood
+
+lambda = Cox2[1, "Box.x"]                 # Extract that lambda
+
+combine.feat.unique$comb.score.box = (combine.feat.unique$comb.score ^ lambda - 1)/lambda   # Transform the original data
+
+combine.feat.unique$comb.score.box.st <- scale(combine.feat.unique$comb.score.box,center = TRUE,scale = TRUE)
+
+qqnorm(combine.feat.unique$comb.score.box,
+       ylab="Quantiles for comb.score")
+qqline(combine.feat.unique$comb.score.box, 
+       col="red")
+
+
+```
+
+
+
+```{r}
+m <- lm(comb.score.std ~ gender + region + highest_education + studied_credits.std + disability + code_module + semester + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique)
+
+par(mfrow=c(2,4))
+plot(m)
+
+# After box-cox
+m <- lm(comb.score.box.st ~ gender + region + highest_education + studied_credits.std + disability + code_module + semester + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique)
+
+plot(combine.feat.unique$comb.score.box.st,combine.feat.unique$comb.score)
+
+plot(m)
+
+car::vif(m)
+
+
+tidym <- tidy(m,conf.int=TRUE) 
+
+tidym <- tidym %>%
+  mutate(term = factor(term,levels = term)) %>%
+  filter(term != "(Intercept)")
+
+ggplot(tidym,aes(x = term, y = estimate,colour=-log10(p.value))) + geom_point() + geom_errorbar(aes(ymin = conf.low, ymax = conf.high))  +
+  theme_bw() + geom_hline(yintercept = 0, linetype = "dotted") + coord_flip() + ggtitle("Factors associated with total score")
+```
+
+
+## Semester B
+
+```{r semesterB-total-score}
+m <- lm(comb.score.std ~ gender + region + highest_education + studied_credits.std + disability + code_module + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique[combine.feat.unique$semester %in% "B",])
+
+par(mfrow=c(2,4))
+plot(m)
+
+# After box-cox
+m <- lm(comb.score.box.st ~ gender + region + highest_education + studied_credits.std + disability + code_module  + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique[combine.feat.unique$semester %in% "B",])
+
+par(mfrow=c(2,2))
+plot(m)
+
+car::vif(m)
+```
+
+* From the plot of residuals and quite high correlation between the y variable and the residuals it looks like we are not explaining that much and indeed the Rsquared of the model is just 0.2.  
+
+```{r residuals-B-sem}
+aug <- augment(m)
+
+pairs(aug[,c(".resid",".fitted","total.clicks.std",".std.resid","studied_credits.std","comb.score.box.st")])
+
+ggplot(aug,aes(x = code_module,y=.resid,fill=region)) + geom_boxplot()
+```
+
+
+```{r}
+# After box-cox
+m <- lm(comb.score.box.st ~ gender + highest_education + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique[combine.feat.unique$semester %in% "B",])
+
+summary(m)
+
+par(mfrow=c(2,2))
+plot(m)
+
+aug <- augment(m)
+
+pairs(aug[,c(".resid",".fitted","total.clicks.std",".std.resid","comb.score.box.st")])
+```
+
+## Semester J
+
+```{r semesterJ-total-score}
+m <- lm(comb.score.std ~ gender + region + highest_education + studied_credits.std + disability + code_module + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique[combine.feat.unique$semester %in% "J",])
+
+summary(m)
+
+par(mfrow=c(2,2))
+plot(m)
+
+# After box-cox
+m <- lm(comb.score.box.st ~ gender + highest_education + studied_credits.std + disability + code_module  + year + total.clicks.std +  num_of_prev_attempts_dich, data = combine.feat.unique[combine.feat.unique$semester %in% "J",])
+
+par(mfrow=c(2,2))
+plot(m)
+
+summary(m)
+
+car::vif(m)
+```
+
+* Same thing for this semester 
+
+```{r residuals-J-sem}
+aug <- augment(m)
+
+pairs(aug[,c(".resid",".fitted","total.clicks.std",".std.resid","studied_credits.std","comb.score.box.st")])
+```
+
+
+# Some demographic plots
+
+* There doesn't appear too mcuh different in the levels of qualifications across regions. A few regions that stick out are Scotland with a higher proportion of HE Qualifications and Ireland, Scotlan, North region with the largest proportion of Post Graduate Qualifications. The London region is the one with the largest, even if small, proportion of students without a qualification. 
+* Regions are also very similar in terms of the age of the students anrolled. 
+
+```{r demographic}
+combine.feat.unique <- combine.feat.unique %>%
+  mutate(highest_education = factor(highest_education,
+                                    levels=c("No Formal quals","Lower Than A Level",
+                                             "A Level or Equivalent","HE Qualification",
+                                             "Post Graduate Qualification")),
+         final_result = factor(final_result,levels=c("Withdrawn","Fail","Pass","Distinction")))
+
+p1 = ggplot(combine.feat.unique,aes(x=region,fill=highest_education)) + 
+  geom_bar(position="fill",colour="white") +
+  theme_bw() + coord_flip()+labs(y = "Proportion" ,x = "Region")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + guides(fill=guide_legend(nrow=2,byrow=TRUE)) 
+
+p2=ggplot(combine.feat.unique,aes(x=region,fill=age_band)) + geom_bar(position="fill",colour="white") +
+  theme_bw() + coord_flip()+labs(y = "Proportion" ,x = "Region")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + guides(fill=guide_legend(nrow=2,byrow=TRUE)) 
+
+p3=ggplot(combine.feat.unique,aes(x=region,y=imd_band_num)) + geom_boxplot() +
+  theme_bw() + labs(y = "Index" ,x = "Region")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + guides(fill=guide_legend(nrow=2,byrow=TRUE)) 
+
+p=plot_grid(p1,p2)
+plot_grid(p,p3,nrow=2)
+```
+
+
+```{r demographic-success}
+col.props <- data.frame(prop.table(table(combine.feat.unique$final_result,combine.feat.unique$imd_band),margin = 2))
+p1=ggplot(col.props,aes(x=Var2,y=Freq,colour=Var1,group=Var1)) + geom_point() + geom_line()+
+  theme_bw()  + labs(x = "Classes for Index of Multiple Depravation" ,y = "Proportion")+theme(axis.text.x = element_text(angle = 45, hjust = 1))+theme(legend.position = "bottom")+guides(fill=guide_legend(nrow=1,byrow=TRUE)) 
+
+col.props <- data.frame(prop.table(table(combine.feat.unique$final_result,combine.feat.unique$age_band),margin = 2))
+p2=ggplot(col.props,aes(x=Var2,y=Freq,colour=Var1,group=Var1)) + geom_point() + geom_line()+
+  theme_bw() + labs(x = "Age class" ,y = "Proportion")+ theme(legend.position = "bottom")
+
+col.props <- data.frame(prop.table(table(combine.feat.unique$final_result,combine.feat.unique$highest_education),margin = 2))
+p3=ggplot(col.props,aes(x=Var2,y=Freq,colour=Var1,group=Var1)) + geom_point() + geom_line()+
+  theme_bw() + labs(x = "Highest education" ,y = "Proportion")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+col.props <- data.frame(prop.table(table(combine.feat.unique$final_result,combine.feat.unique$region),margin = 2))
+p4=ggplot(col.props,aes(x=Var2,y=Freq,colour=Var1,group=Var1)) + geom_point() + geom_line()+
+  theme_bw() + labs(x = "Region" ,y = "Proportion")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p = plot_grid(p1 + theme(legend.position = "none"),
+          p2 + theme(legend.position = "none"),
+          p3 + theme(legend.position = "none"),
+          p4 + theme(legend.position = "none"))
+
+legend <- get_legend(p1)
+
+plot_grid(p,legend,nrow=2,rel_heights = c(5,1))
+```
+
+
+
+```{r}
+ggplot(combine.feat.unique,aes(x=code_module,fill=final_result)) + geom_bar() + facet_wrap(~semester) +
+  theme_bw() + labs(x = "Code modules" ,y = "Proportion")+ theme(legend.position = "bottom") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
