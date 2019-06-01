@@ -2,54 +2,89 @@
 title: "Factors influencing success"
 author: "Anna Quaglieri"
 date: "30/05/2019"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
-```{r echo = FALSE,message=FALSE, warning=FALSE,setup}
+```{r setup-final,echo = FALSE,message=FALSE, warning=FALSE}
 library(tidyverse)
 library(Hmisc)
 library(MASS)
+library(broom)
+library(cowplot)
+library(MKmisc)
+library(plotROC)
+library(ggrepel)
+library(knitr)
 
-knitr::opts_chunk$set(eval = TRUE,echo = FALSE,tidy = TRUE,message = FALSE,include = FALSE,warning = FALSE)
+# eval = TRUE,echo = FALSE,tidy = TRUE,message = FALSE,include = FALSE,warning = FALSE,
+knitr::opts_chunk$set(cache = TRUE,root.dir = here::here())
 ```
 
 
-```{r}
+```{r echo=FALSE}
 knitr::read_chunk(path = "nous-student.R")
 ```
 
-```{r read-data}
+```{r read-data,message=FALSE,echo=FALSE}
+```
+
+```{r merge-vle,include=FALSE,echo=FALSE}
+```
+
+```{r merge-assessment,include=FALSE,echo=FALSE}
+```
+
+```{r merge-student-infos,include=FALSE,echo=FALSE}
+```
+
+```{r create-features,include=FALSE,echo=FALSE}
 ```
 
 
-```{r merge-assessment}
+```{r keep-registered-students,include=FALSE,echo=FALSE}
 ```
 
 
-```{r merge-vle}
+```{r filter-unreg,include=FALSE,echo=FALSE}
 ```
 
 
-```{r merge-student-infos}
+```{r merge-with-ass-clicks,include=FALSE,echo=FALSE}
 ```
 
-```{r study-replicate-students,eval=TRUE,include=FALSE}
+```{r recode-vars,include=FALSE,echo=FALSE}
+```
+
+
+```{r study-replicate-students,eval=TRUE,include=FALSE,include=FALSE,echo=FALSE}
+```
+
+```{r remove-duplicate-students,include=FALSE,echo=FALSE}
+```
+
+```{r add-nstudent-per-module,include=FALSE,echo=FALSE}
 ```
 
 
 # Student's information available
 
-The Open University Learning Analytics dataset contains information for `r length(unique(student.info$id_student))` students including: the course module that they attended; information about the course module (length, credit, etc...); their final results and student interaction with the virtual learning environment (VLE). Every student can either **withdraw**, **fail**, **pass** or **pass with distinction** a module that they attended. `r length(unique(repl.student$id_student))` students enrolled in more than one module (either the same or a different one). Given the large amount of student available, only one entry per student was included in this study. If a student enrolled in the same module multiple times, either for initial failure or withdrawal, we kept their most recent entry. Whereas if a student enrolled in different modules we randomly selected one of them. This step removed roughly 12% of the initial student's entries. In addition, in order to avoid mis-reporting bias, we excluded students who appeared to have never registered into a module (registration date was unavailable) and students who unregistered from a module but their final result was not, **withdrawal**, as expected.  
+
+
+The Open University Learning Analytics dataset contains information for `r length(unique(student.info$id_student))` students including: the course module that they attended; information about the course module (length, credit, etc...); their final results and student interaction with the virtual learning environment (VLE). Every student can either **withdraw**, **fail**, **pass** or **pass with distinction** a module that they attended. # `r length(unique(repl.student$id_student))` students enrolled in more than one module (either the same or a different one). Given the large amount of student available, only one entry per student was included in this study. If a student enrolled in the same module multiple times, either for initial failure or withdrawal, we kept their most recent entry. Whereas if a student enrolled in different modules we randomly selected one of them. This step removed roughly 12% of the initial student's entries. In addition, in order to avoid mis-reporting bias, we excluded students who appeared to have never registered into a module (registration date was unavailable) and students who unregistered from a module but their final result was not, **withdrawal**, as expected.  
 
 Table 1 shows the student available in the study by their final result and Figure 1 reports how many students attended each moudule across years and presentations.   
 
-```{r table-dataset-unique, results='asis',eval=TRUE,include=TRUE}
+```{r table-dataset-unique, eval=TRUE,include=TRUE,echo=FALSE}
 ```
 
 
-```{r affluence-to-course, eval=TRUE,include=TRUE}
+```{r vle-type-frequency,include=FALSE,echo=FALSE}
 ```
 
+```{r click-perstudent-topactivity,include=FALSE,echo=FALSE}
+```
 
 # Defining students success
 
@@ -57,20 +92,57 @@ We assessed the factors that led students to withdrawal as well as factors that 
 Interestingly 
 
 
-```{r demographic-success, eval=TRUE,include=TRUE}
-```
-
-```{r demographic, eval=TRUE,include=TRUE}
-```
-
-
-
-
 * Main point. 
 
 Understanding the reason behind dropout of students is fundamental to put resources into action. There is a wide hetergeneity in the dropout rate between modules which goes from a minimum of 10% for module GGG to more than 40% for module CCC. The dropout remains failry similar between semester but slightly worsen in 2014. Dropout and failure to pass exams seems to be determined by similar factors, with wealth of the neighborooh being an important factor. However, it is interesting to notice that a higher socio-economic status does not  induce lower dropout. While regions **** show the lowest IMB and higher dropout rate, **** whilst having the hightes wealth also have high dropout relately to the average. **** are the regions witht he lowest dropout rate and they lay on average socio-economic status.       
 
+
+```{r affluence-to-course, eval=TRUE,include=TRUE,echo=FALSE}
+```
+
+
+# Socio-demographic factors impacting students dropout and success
+
+```{r define-pass-fail,include=FALSE,echo=FALSE,message=FALSE}
+```
+
+
+```{r include=TRUE,echo=FALSE}
+include_graphics("output/success-dropout-imb-region-module-edu.png")
+```
    
+  
+```{r frequency-table-VLE-final-result,include=TRUE,echo=FALSE,message=FALSE} 
+```
+
+
+```{r combined-clicks-ass,include=TRUE,echo=FALSE,message=FALSE}
+
+```
+
+
+
+# Positive impact of the VLE to the success rate of students
+
+```{r very-skewed-vars,include=FALSE,echo=FALSE}
+```
+
+```{r logistic2-withdraw,include=FALSE,echo=FALSE}
+```
+
+
+```{r plot-logistic-with, include=TRUE,echo=FALSE}
+```
+
+
+```{r logistic-success,include=FALSE,echo=FALSE}
+```
+
+
+```{r plot-logistic-success, include=TRUE,echo=FALSE}
+
+```
+
 
 - the droput rate of students is impacted by both socio-economical and geographical
 
